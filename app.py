@@ -107,7 +107,7 @@ if not df.empty:
     if selected_display:
         selected_rows = df[df['검색용이름'].isin(selected_display)]
         
-        # 기본 데이터 계산 (1배수 기준, Max Value 로직)
+        # 1. 기본 데이터 계산 (원방 기준 합산)
         herb_dict = {}
         for composition in selected_rows['구성약재']:
             items = str(composition).split(',')
@@ -119,7 +119,12 @@ if not df.empty:
                     else:
                         herb_dict[name] = amount
         
-        # [핵심] 배율/첩수 변경 시 표를 새로고침하기 위한 고유 키 생성
+        # 2. [핵심 수정] 표를 만들기 전에 미리 배율을 곱해버립니다!
+        # 이제 herb_dict에는 이미 1.2배 된 숫자가 들어갑니다.
+        if multiplier != 1.0:
+            for k, v in herb_dict.items():
+                herb_dict[k] = v * multiplier
+
         unique_key = f"editor_{len(selected_display)}_{multiplier}_{cheop_su}"
 
         initial_data = pd.DataFrame([
@@ -132,9 +137,12 @@ if not df.empty:
 
         with col_left:
             st.subheader("📝 처방 구성 및 가감(加減)")
-            st.caption(f"현재 **{multiplier}배** 농도입니다. (표의 1첩 용량은 원방 기준)")
+            # 안내 문구 수정
+            if multiplier != 1.0:
+                st.warning(f"⚡ 표의 숫자는 이미 **{multiplier}배**가 적용된 용량입니다.")
+            else:
+                st.caption(f"현재 기본 용량(1.0배)입니다.")
 
-            # 데이터 에디터
             edited_df = st.data_editor(
                 initial_data,
                 num_rows="dynamic",
@@ -152,25 +160,24 @@ if not df.empty:
                     st.write(f"**{row['처방명']}:** {row['구성약재']}")
 
         with col_right:
-            # 여기가 아까 끊겼던 부분입니다. 이제 완벽합니다!
             if multiplier != 1.0:
                 st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
             else:
                 st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
             
             if not edited_df.empty:
-                # ★ 계산 공식: 화면에 보이는 1첩 용량 * 첩수 * 배율 ★
-                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su * multiplier
+                # [수정] 표 숫자가 이미 배율이 적용되어 있으므로, 여기서는 첩수만 곱합니다.
+                # (배율을 또 곱하면 두 번 곱해지니까요!)
+                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su
                 
-                # 용량 큰 순서대로 정렬
                 sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
                 
                 total_weight_1 = edited_df["1첩 용량(g)"].sum()
                 total_weight_final = edited_df["총 용량(g)"].sum()
                 
                 m1, m2 = st.columns(2)
-                m1.metric("1첩 기준량", f"{total_weight_1:.1f} g")
-                m2.metric(f"총 무게 ({multiplier}배)", f"{total_weight_final:.1f} g")
+                m1.metric(f"1첩 ({multiplier}배 적용됨)", f"{total_weight_1:.1f} g")
+                m2.metric(f"총 무게 ({cheop_su}첩)", f"{total_weight_final:.1f} g")
                 
                 st.divider()
                 st.markdown("##### 📋 탕전실 전달용")
