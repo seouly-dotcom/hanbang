@@ -126,7 +126,7 @@ if not df.empty:
 
         unique_key = f"editor_{len(selected_display)}_{multiplier}_{cheop_su}"
 
-        # 3. [핵심] 여기서 반올림(round) 후 정수(int)로 변환하여 소수점 제거!
+        # 3. [핵심] 반올림(round) 후 정수(int) 변환
         initial_data = pd.DataFrame([
             {"약재명": k, "1첩 용량(g)": int(round(v)), "비고": ""} 
             for k, v in herb_dict.items()
@@ -142,9 +142,57 @@ if not df.empty:
             else:
                 st.caption(f"현재 기본 용량(1.0배)입니다.")
 
+            # ★ 에러가 났던 부분이 바로 여기입니다 (괄호 확인 완료) ★
             edited_df = st.data_editor(
                 initial_data,
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
-                    "약재명": st.column_config.TextColumn
+                    "약재명": st.column_config.TextColumn("약재명", required=True),
+                    "1첩 용량(g)": st.column_config.NumberColumn("1첩 용량(g)", min_value=0, format="%d"),
+                    "비고": st.column_config.TextColumn("비고")
+                },
+                key=unique_key 
+            )
+            
+            with st.expander("참고: 원본 처방 구성"):
+                for idx, row in selected_rows.iterrows():
+                    st.write(f"**{row['처방명']}:** {row['구성약재']}")
+
+        with col_right:
+            if multiplier != 1.0:
+                st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
+            else:
+                st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
+            
+            if not edited_df.empty:
+                # 총량 계산
+                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su
+                
+                sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
+                
+                total_weight_1 = edited_df["1첩 용량(g)"].sum()
+                total_weight_final = edited_df["총 용량(g)"].sum()
+                
+                m1, m2 = st.columns(2)
+                m1.metric(f"1첩 ({multiplier}배)", f"{int(total_weight_1)} g")
+                m2.metric(f"총 무게 ({cheop_su}첩)", f"{int(total_weight_final)} g")
+                
+                st.divider()
+                st.markdown("##### 📋 탕전실 전달용")
+                
+                final_text_list = []
+                for idx, row in sorted_result.iterrows():
+                    if row['약재명'] and row['1첩 용량(g)'] > 0:
+                        final_text_list.append(f"{row['약재명']} {int(row['총 용량(g)'])}g")
+                
+                result_text = ", ".join(final_text_list)
+                st.text_area("복사해서 차트에 붙여넣으세요", result_text, height=200)
+                
+                st.dataframe(sorted_result[['약재명', '1첩 용량(g)', '총 용량(g)']], hide_index=True, use_container_width=True)
+                st.success("작성이 완료되었습니다.")
+
+    else:
+        st.info("👈 왼쪽 사이드바에서 처방을 검색하여 시작하세요.")
+else:
+    st.error("⚠️ 데이터 파일을 찾을 수 없습니다!")
