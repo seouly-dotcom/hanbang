@@ -107,7 +107,7 @@ if not df.empty:
     if selected_display:
         selected_rows = df[df['검색용이름'].isin(selected_display)]
         
-        # 기본 데이터 계산 (1배수 기준)
+        # 기본 데이터 계산 (1배수 기준, Max Value 로직)
         herb_dict = {}
         for composition in selected_rows['구성약재']:
             items = str(composition).split(',')
@@ -119,8 +119,7 @@ if not df.empty:
                     else:
                         herb_dict[name] = amount
         
-        # [핵심 수정] 배율(multiplier)이 바뀌면 표를 새로 그리도록 'key'에 배율을 포함시킴
-        # 이렇게 하면 1.2로 바꿨을 때 아예 새로운 표가 생성되어 반영됨
+        # [핵심] 배율/첩수 변경 시 표를 새로고침하기 위한 고유 키 생성
         unique_key = f"editor_{len(selected_display)}_{multiplier}_{cheop_su}"
 
         initial_data = pd.DataFrame([
@@ -145,7 +144,7 @@ if not df.empty:
                     "1첩 용량(g)": st.column_config.NumberColumn("1첩 용량(g)", min_value=0.0, format="%.1f"),
                     "비고": st.column_config.TextColumn("비고")
                 },
-                key=unique_key # 여기가 비법입니다!
+                key=unique_key 
             )
             
             with st.expander("참고: 원본 처방 구성"):
@@ -153,7 +152,41 @@ if not df.empty:
                     st.write(f"**{row['처방명']}:** {row['구성약재']}")
 
         with col_right:
+            # 여기가 아까 끊겼던 부분입니다. 이제 완벽합니다!
             if multiplier != 1.0:
                 st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
             else:
-                st.subheader(f"📊 최종 처방전 ({cheop_
+                st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
+            
+            if not edited_df.empty:
+                # ★ 계산 공식: 화면에 보이는 1첩 용량 * 첩수 * 배율 ★
+                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su * multiplier
+                
+                # 용량 큰 순서대로 정렬
+                sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
+                
+                total_weight_1 = edited_df["1첩 용량(g)"].sum()
+                total_weight_final = edited_df["총 용량(g)"].sum()
+                
+                m1, m2 = st.columns(2)
+                m1.metric("1첩 기준량", f"{total_weight_1:.1f} g")
+                m2.metric(f"총 무게 ({multiplier}배)", f"{total_weight_final:.1f} g")
+                
+                st.divider()
+                st.markdown("##### 📋 탕전실 전달용")
+                
+                final_text_list = []
+                for idx, row in sorted_result.iterrows():
+                    if row['약재명'] and row['1첩 용량(g)'] > 0:
+                        final_text_list.append(f"{row['약재명']} {row['총 용량(g)']:.1f}g")
+                
+                result_text = ", ".join(final_text_list)
+                st.text_area("복사해서 차트에 붙여넣으세요", result_text, height=200)
+                
+                st.dataframe(sorted_result[['약재명', '1첩 용량(g)', '총 용량(g)']], hide_index=True, use_container_width=True)
+                st.success("작성이 완료되었습니다.")
+
+    else:
+        st.info("👈 왼쪽 사이드바에서 처방을 검색하여 시작하세요.")
+else:
+    st.error("⚠️ 데이터 파일을 찾을 수 없습니다!")
