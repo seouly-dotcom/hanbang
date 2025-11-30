@@ -119,16 +119,16 @@ if not df.empty:
                     else:
                         herb_dict[name] = amount
         
-        # 2. [핵심 수정] 표를 만들기 전에 미리 배율을 곱해버립니다!
-        # 이제 herb_dict에는 이미 1.2배 된 숫자가 들어갑니다.
+        # 2. 배율 적용 (계산 단계에서 먼저 곱함)
         if multiplier != 1.0:
             for k, v in herb_dict.items():
                 herb_dict[k] = v * multiplier
 
         unique_key = f"editor_{len(selected_display)}_{multiplier}_{cheop_su}"
 
+        # 3. [핵심] 여기서 반올림(round) 후 정수(int)로 변환하여 소수점 제거!
         initial_data = pd.DataFrame([
-            {"약재명": k, "1첩 용량(g)": v, "비고": ""} 
+            {"약재명": k, "1첩 용량(g)": int(round(v)), "비고": ""} 
             for k, v in herb_dict.items()
         ])
         initial_data = initial_data.sort_values("약재명")
@@ -137,9 +137,8 @@ if not df.empty:
 
         with col_left:
             st.subheader("📝 처방 구성 및 가감(加減)")
-            # 안내 문구 수정
             if multiplier != 1.0:
-                st.warning(f"⚡ 표의 숫자는 이미 **{multiplier}배**가 적용된 용량입니다.")
+                st.warning(f"⚡ 표의 숫자는 **{multiplier}배** 적용 후 **반올림**된 용량입니다.")
             else:
                 st.caption(f"현재 기본 용량(1.0배)입니다.")
 
@@ -148,52 +147,4 @@ if not df.empty:
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
-                    "약재명": st.column_config.TextColumn("약재명", required=True),
-                    "1첩 용량(g)": st.column_config.NumberColumn("1첩 용량(g)", min_value=0.0, format="%.1f"),
-                    "비고": st.column_config.TextColumn("비고")
-                },
-                key=unique_key 
-            )
-            
-            with st.expander("참고: 원본 처방 구성"):
-                for idx, row in selected_rows.iterrows():
-                    st.write(f"**{row['처방명']}:** {row['구성약재']}")
-
-        with col_right:
-            if multiplier != 1.0:
-                st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
-            else:
-                st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
-            
-            if not edited_df.empty:
-                # [수정] 표 숫자가 이미 배율이 적용되어 있으므로, 여기서는 첩수만 곱합니다.
-                # (배율을 또 곱하면 두 번 곱해지니까요!)
-                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su
-                
-                sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
-                
-                total_weight_1 = edited_df["1첩 용량(g)"].sum()
-                total_weight_final = edited_df["총 용량(g)"].sum()
-                
-                m1, m2 = st.columns(2)
-                m1.metric(f"1첩 ({multiplier}배 적용됨)", f"{total_weight_1:.1f} g")
-                m2.metric(f"총 무게 ({cheop_su}첩)", f"{total_weight_final:.1f} g")
-                
-                st.divider()
-                st.markdown("##### 📋 탕전실 전달용")
-                
-                final_text_list = []
-                for idx, row in sorted_result.iterrows():
-                    if row['약재명'] and row['1첩 용량(g)'] > 0:
-                        final_text_list.append(f"{row['약재명']} {row['총 용량(g)']:.1f}g")
-                
-                result_text = ", ".join(final_text_list)
-                st.text_area("복사해서 차트에 붙여넣으세요", result_text, height=200)
-                
-                st.dataframe(sorted_result[['약재명', '1첩 용량(g)', '총 용량(g)']], hide_index=True, use_container_width=True)
-                st.success("작성이 완료되었습니다.")
-
-    else:
-        st.info("👈 왼쪽 사이드바에서 처방을 검색하여 시작하세요.")
-else:
-    st.error("⚠️ 데이터 파일을 찾을 수 없습니다!")
+                    "약재명": st.column_config.TextColumn
