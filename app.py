@@ -17,24 +17,31 @@ st.markdown("""
 # --- 1. 데이터 로드 및 전처리 ---
 @st.cache_data
 def load_data():
+    df = pd.DataFrame() # 빈 데이터프레임으로 시작
     try:
         df = pd.read_csv('formulas.csv', encoding='utf-8')
     except:
         try:
             df = pd.read_csv('formulas.csv', encoding='cp949')
         except:
-            return pd.DataFrame()
-    
-    if '약어' not in df.columns:
-        df['약어'] = ""
-    
-    def create_display_name(row):
-        if pd.notna(row['약어']) and str(row['약어']).strip() != "":
-            return f"{row['처방명']} ({row['약어']})"
-        else:
-            return row['처방명']
+            return pd.DataFrame() # 실패하면 빈 상태 반환
             
-    df['검색용이름'] = df.apply(create_display_name, axis=1)
+    if not df.empty:
+        if '약어' not in df.columns:
+            df['약어'] = ""
+        
+        def create_display_name(row):
+            if pd.notna(row['약어']) and str(row['약어']).strip() != "":
+                return f"{row['처방명']} ({row['약어']})"
+            else:
+                return row['처방명']
+        
+        # '검색용이름' 컬럼 생성
+        if '처방명' in df.columns:
+            df['검색용이름'] = df.apply(create_display_name, axis=1)
+        else:
+            return pd.DataFrame() # 처방명 컬럼이 없으면 빈 상태 반환
+    
     return df
 
 # 약재 파싱 함수
@@ -52,7 +59,12 @@ def parse_herb(herb_str):
 # --- 데이터 불러오기 ---
 df = load_data()
 
-# --- 2. 사이드바 (처방 선택 및 설정) ---
+# ★ 안전장치: 변수 미리 만들기 (이게 없어서 에러가 났던 겁니다!) ★
+selected_display = []
+multiplier = 1.0
+cheop_su = 20
+
+# --- 2. 사이드바 ---
 with st.sidebar:
     st.title("🗂️ 처방 선택")
     
@@ -67,10 +79,8 @@ with st.sidebar:
         st.markdown("---")
         st.subheader("⚙️ 용량 설정")
         
-        # 1. 첩수 설정
         cheop_su = st.number_input("1. 몇 첩(Cheop) 달이시나요?", min_value=1, value=20, step=1)
         
-        # 2. 배율 설정 (0.1단위로 자유롭게 조절 가능)
         st.write("") 
         multiplier = st.number_input(
             "2. 처방 강도 배율 (예: 0.8, 1.2)", 
@@ -80,111 +90,108 @@ with st.sidebar:
             format="%.1f"
         )
         
-        # 배율에 따른 안내 메시지 (자동 변경)
         if multiplier == 1.0:
-            st.info(f"💡 기본 용량 (1.0배) 정량 처방")
+            st.info(f"💡 기본 용량 (1.0배)")
         elif multiplier > 1.0:
-            st.warning(f"🔥 **{multiplier}배** 진하게(증량) 처방합니다!")
+            st.warning(f"🔥 **{multiplier}배** 진하게(증량)")
         else:
-            st.success(f"📉 **{multiplier}배** 순하게(감량) 처방합니다. (소아/노인)")
+            st.success(f"📉 **{multiplier}배** 순하게(감량)")
             
         st.markdown("---")
         if st.button("🔄 초기화"):
             st.rerun()
+    else:
+        # 데이터가 없을 때 표시할 사이드바 메시지
+        st.warning("데이터 파일이 없습니다.")
 
 # --- 3. 메인 화면 ---
 st.title("🌿 스마트 처방 운용 시스템")
 
-if selected_display:
-    selected_rows = df[df['검색용이름'].isin(selected_display)]
-    
-    # 약재 합산 로직 (Max Value 기준)
-    herb_dict = {}
-    for composition in selected_rows['구성약재']:
-        items = str(composition).split(',')
-        for item in items:
-            name, amount = parse_herb(item)
-            if name:
-                if name in herb_dict:
-                    herb_dict[name] = max(herb_dict[name], amount)
-                else:
-                    herb_dict[name] = amount
-    
-    # 편집용 데이터 생성
-    initial_data = pd.DataFrame([
-        {"약재명": k, "1첩 용량(g)": v, "비고": ""} 
-        for k, v in herb_dict.items()
-    ])
-    initial_data = initial_data.sort_values("약재명")
-
-    col_left, col_right = st.columns([1.2, 1])
-
-    # [왼쪽] 처방 편집기
-    with col_left:
-        st.subheader("📝 처방 구성 및 가감(加減)")
-        st.caption(f"현재 **{multiplier}배** 농도로 계산 중입니다. 표의 수치는 **1첩 원방 기준**입니다.")
-
-        edited_df = st.data_editor(
-            initial_data,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "약재명": st.column_config.TextColumn("약재명", required=True),
-                "1첩 용량(g)": st.column_config.NumberColumn("1첩 용량(g)", min_value=0.0, format="%.1f"),
-                "비고": st.column_config.TextColumn("비고")
-            },
-            key="editor"
-        )
+# 데이터가 잘 로드되었는지 확인
+if not df.empty:
+    if selected_display:
+        selected_rows = df[df['검색용이름'].isin(selected_display)]
         
-        with st.expander("참고: 원본 처방 구성"):
-            for idx, row in selected_rows.iterrows():
-                st.write(f"**{row['처방명']}:** {row['구성약재']}")
-
-    # [오른쪽] 최종 계산서 (배율 적용됨)
-    with col_right:
-        # 제목에 배율 표시
-        if multiplier != 1.0:
-            st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
-        else:
-            st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
+        herb_dict = {}
+        for composition in selected_rows['구성약재']:
+            items = str(composition).split(',')
+            for item in items:
+                name, amount = parse_herb(item)
+                if name:
+                    if name in herb_dict:
+                        herb_dict[name] = max(herb_dict[name], amount)
+                    else:
+                        herb_dict[name] = amount
         
-        if not edited_df.empty:
-            # ★ 총량 계산 공식: 1첩용량 * 첩수 * 배율 ★
-            edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su * multiplier
+        initial_data = pd.DataFrame([
+            {"약재명": k, "1첩 용량(g)": v, "비고": ""} 
+            for k, v in herb_dict.items()
+        ])
+        initial_data = initial_data.sort_values("약재명")
+
+        col_left, col_right = st.columns([1.2, 1])
+
+        with col_left:
+            st.subheader("📝 처방 구성 및 가감(加減)")
+            st.caption(f"현재 **{multiplier}배** 농도입니다.")
+
+            # 키값 충돌 방지
+            key_val = f"editor_{len(selected_display)}_{multiplier}"
             
-            # 정렬: 용량이 큰 순서대로
-            sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
-            
-            # 합계 보여주기
-            total_weight_1 = edited_df["1첩 용량(g)"].sum()
-            total_weight_final = edited_df["총 용량(g)"].sum()
-            
-            m1, m2 = st.columns(2)
-            m1.metric("1첩 기준량", f"{total_weight_1:.1f} g")
-            # 배율이 적용된 최종 무게
-            m2.metric(f"총 무게 ({multiplier}배)", f"{total_weight_final:.1f} g")
-            
-            st.divider()
-            
-            st.markdown("##### 📋 탕전실 전달용 (용량순)")
-            
-            final_text_list = []
-            for idx, row in sorted_result.iterrows():
-                if row['약재명'] and row['1첩 용량(g)'] > 0:
-                    # 텍스트에는 총량만 깔끔하게 표시
-                    final_text_list.append(f"{row['약재명']} {row['총 용량(g)']:.1f}g")
-            
-            result_text = ", ".join(final_text_list)
-            st.text_area("복사해서 차트에 붙여넣으세요", result_text, height=200)
-            
-            # 상세 표
-            st.dataframe(
-                sorted_result[['약재명', '1첩 용량(g)', '총 용량(g)']], 
-                hide_index=True,
-                use_container_width=True
+            edited_df = st.data_editor(
+                initial_data,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "약재명": st.column_config.TextColumn("약재명", required=True),
+                    "1첩 용량(g)": st.column_config.NumberColumn("1첩 용량(g)", min_value=0.0, format="%.1f"),
+                    "비고": st.column_config.TextColumn("비고")
+                },
+                key=key_val
             )
             
-            st.success("작성이 완료되었습니다.")
+            with st.expander("참고: 원본 처방 구성"):
+                for idx, row in selected_rows.iterrows():
+                    st.write(f"**{row['처방명']}:** {row['구성약재']}")
 
+        with col_right:
+            if multiplier != 1.0:
+                st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
+            else:
+                st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
+            
+            if not edited_df.empty:
+                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su * multiplier
+                sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
+                
+                total_weight_1 = edited_df["1첩 용량(g)"].sum()
+                total_weight_final = edited_df["총 용량(g)"].sum()
+                
+                m1, m2 = st.columns(2)
+                m1.metric("1첩 기준량", f"{total_weight_1:.1f} g")
+                m2.metric(f"총 무게 ({multiplier}배)", f"{total_weight_final:.1f} g")
+                
+                st.divider()
+                st.markdown("##### 📋 탕전실 전달용")
+                
+                final_text_list = []
+                for idx, row in sorted_result.iterrows():
+                    if row['약재명'] and row['1첩 용량(g)'] > 0:
+                        final_text_list.append(f"{row['약재명']} {row['총 용량(g)']:.1f}g")
+                
+                result_text = ", ".join(final_text_list)
+                st.text_area("복사해서 차트에 붙여넣으세요", result_text, height=200)
+                
+                st.dataframe(sorted_result[['약재명', '1첩 용량(g)', '총 용량(g)']], hide_index=True, use_container_width=True)
+                st.success("작성이 완료되었습니다.")
+
+    else:
+        st.info("👈 왼쪽 사이드바에서 처방을 검색하여 시작하세요.")
 else:
-    st.info("👈 왼쪽 사이드바에서 처방을 검색하여 시작하세요.")
+    # ❌ 데이터가 없을 때 나오는 화면
+    st.error("⚠️ 데이터 파일을 찾을 수 없습니다!")
+    st.markdown("""
+    **해결 방법:**
+    1. 깃허브(GitHub)에 `formulas.csv` 파일이 업로드되어 있는지 확인하세요.
+    2. 파일 안에 처방 데이터가 들어있는지 확인하세요.
+    """)
