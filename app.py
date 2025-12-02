@@ -1,198 +1,411 @@
 import streamlit as st
-import pandas as pd
 import re
-import os
 
-# --- 프로그램 설정 ---
-st.set_page_config(page_title="스마트 한의 처방 시스템", layout="wide", page_icon="🌿")
+# ---------------------------------------------------------
+# 1. 상한론 처방 DB (자료 근거 / 클린 데이터)
+# ---------------------------------------------------------
+FORMULA_DB = [
+    # [백호가인삼탕 - 열궐/진액부족]
+    {
+        "name": "백호가인삼탕", "type": "양명병 (조열)", 
+        "symptoms": ["사지냉", "구건", "극심한 갈증", "물 많이 마심", "땀이 남", "피부 열감", "맥홍대", "설태 황", "여름철 식욕부진"],
+        "rx": "석고 32g, 지모 12g, 감초 4g, 갱미 12g, 인삼 6g",
+        "info": "손발이 차더라도 입이 마르고 갈증이 심하면 사용 (열궐). 흉부 희안/거안 무관."
+    },
+    {
+        "name": "백호탕", "type": "양명병", 
+        "symptoms": ["갈증", "땀이 남", "전신 열감", "맥활삭", "설태 황", "불면", "전신한"],
+        "rx": "석고 32g, 지모 12g, 감초 4g, 갱미 12g",
+        "info": "기분(氣分)의 열이 성함. 인삼탕증(진액부족)보다는 덜함"
+    },
 
-# --- 스타일(CSS) 설정 ---
-st.markdown("""
-<style>
-    .big-font { font-size: 20px !important; font-weight: bold; }
-    .stDataFrame { border: 1px solid #ddd; border-radius: 5px; }
-    div[data-testid="stMetricValue"] { font-size: 24px; color: #0068c9; }
-</style>
-""", unsafe_allow_html=True)
+    # [소시호탕 계열]
+    {
+        "name": "소시호탕", "type": "소양병", 
+        "symptoms": ["흉협고만(중)", "입이 씀", "구건", "목 마름", "어지러움", "식욕저하", "한열왕래", "맥현", "구역질"],
+        "rx": "시호 12g, 황금 8g, 인삼 4g, 반하 8g, 감초 4g, 생강 4g, 대조 4g",
+        "info": "흉협고만(옆구리 그득)이 핵심. 반표반리증"
+    },
+    {
+        "name": "시호계지탕", "type": "태양소양합병", 
+        "symptoms": ["흉협고만(중)", "오한", "발열", "관절통", "식욕저하", "입이 씀", "맥부현"],
+        "rx": "시호 10g, 황금 6g, 인삼 4g, 반하 6g, 계지 4g, 작약 4g, 생강 4g, 대조 4g, 감초 3g",
+        "info": "소시호탕증에 감기 기운(표증)과 관절통이 남아있음"
+    },
+    {
+        "name": "대시호탕", "type": "소양양명", 
+        "symptoms": ["흉협고만(강)", "변비", "명치 통증", "구토", "맥현", "복부탄력 강", "심하지결"],
+        "rx": "시호 12g, 황금 8g, 작약 8g, 대황 6g, 지실 8g, 반하 8g, 생강 8g, 대조 6g",
+        "info": "소시호증에 변비와 복통(실증)이 겹침"
+    },
 
-# --- 1. 데이터 로드 및 전처리 ---
-@st.cache_data
-def load_data():
-    df = pd.DataFrame()
-    try:
-        df = pd.read_csv('formulas.csv', encoding='utf-8')
-    except:
-        try:
-            df = pd.read_csv('formulas.csv', encoding='cp949')
-        except:
-            return pd.DataFrame()
-            
-    if not df.empty:
-        if '약어' not in df.columns:
-            df['약어'] = ""
-        
-        def create_display_name(row):
-            if pd.notna(row['약어']) and str(row['약어']).strip() != "":
-                return f"{row['처방명']} ({row['약어']})"
-            else:
-                return row['처방명']
-        
-        if '처방명' in df.columns:
-            df['검색용이름'] = df.apply(create_display_name, axis=1)
-        else:
-            return pd.DataFrame()
-    return df
+    # [상열하냉/한열착잡]
+    {
+        "name": "건강황금황련인삼탕", "type": "태음/궐음", 
+        "symptoms": ["상열하냉", "얼굴 화끈거림", "발이 시림", "구토", "설사", "식욕부진", "설태 황"],
+        "rx": "건강 6g, 황금 6g, 황련 6g, 인삼 6g",
+        "info": "상체는 열이 나고 하체는 차가움"
+    },
+    {
+        "name": "오매환", "type": "궐음병", 
+        "symptoms": ["상열하냉", "가슴 답답", "배가 차가움", "구역질", "사지냉", "설사", "갈증"],
+        "rx": "오매 30g, 세신 6g, 건강 10g, 황련 16g, 당귀 4g, 부자 6g, 촉초 4g, 계지 6g, 인삼 6g, 황백 6g",
+        "info": "한열이 뒤섞여 윗배는 뜨겁고 아랫배는 차가움"
+    },
 
-def parse_herb(herb_str):
-    numbers = re.findall(r"[\d.]+", str(herb_str))
-    names = re.findall(r"[가-힣]+", str(herb_str))
-    if names and numbers:
-        return names[0], float(numbers[0])
-    elif names and not numbers:
-        return names[0], 0.0
-    else:
-        return None, 0.0
-
-# --- 데이터 불러오기 ---
-df = load_data()
-
-# 변수 초기화
-selected_display = []
-multiplier = 1.0
-cheop_su = 20
-
-# --- 2. 사이드바 ---
-with st.sidebar:
-    st.title("🗂️ 처방 선택")
+    # [태양병/감기]
+    {
+        "name": "계지탕", "type": "태양병 (허증)", 
+        "symptoms": ["오한", "발열", "땀이 남", "식욕저하", "두통", "오풍", "맥부", "맥완", "상충감", "흉부희안"],
+        "rx": "계지 6g, 작약 6g, 생강 6g, 대조 6g, 감초 4g",
+        "info": "기운이 없고 땀이 저절로 나는 감기"
+    },
+    {
+        "name": "마황탕", "type": "태양병 (실증)", 
+        "symptoms": ["오한", "발열", "땀이 안 남", "몸이 쑤심", "관절통", "숨참", "맥부", "맥긴", "거안(강)"],
+        "rx": "마황 8g, 계지 6g, 행인 6g, 감초 4g",
+        "info": "땀이 없고 뼈마디가 쑤시는 몸살"
+    },
+    {
+        "name": "갈근탕", "type": "태양양명", 
+        "symptoms": ["뒷목 뻣뻣함(항강)", "설사", "오한", "맥부", "맥긴", "거안(중)", "후중"],
+        "rx": "갈근 8g, 마황 6g, 계지 4g, 작약 4g, 생강 4g, 대조 4g, 감초 4g",
+        "info": "뒷목과 등줄기가 뻣뻣함"
+    },
+    {
+        "name": "대청룡탕", "type": "태양병 (표실리열)", 
+        "symptoms": ["발열", "땀이 안 남", "가슴 답답", "갈증", "짜증", "맥부", "맥긴", "흉부거안(보통)"],
+        "rx": "마황 12g, 석고 24g, 계지 6g, 감초 4g, 생강 6g, 대조 6g, 행인 6g",
+        "info": "겉은 차고 속은 뜨거워 답답함. 석고 24g"
+    },
     
-    if not df.empty:
-        options = df['검색용이름'].tolist()
-        selected_display = st.multiselect(
-            "처방 검색 (약어 가능)",
-            options=options,
-            placeholder="예: 갈근탕, 소청..."
+    # [소화기/비증]
+    {
+        "name": "반하사심탕", "type": "소양병 (비증)", 
+        "symptoms": ["심하비", "명치 답답", "구역질", "속쓰림", "배에서 물소리", "설사", "장명"],
+        "rx": "반하 12g, 황금 6g, 인삼 6g, 감초 6g, 건강 6g, 대조 6g, 황련 2g",
+        "info": "명치 밑이 그득하지만 누르면 아프지 않음"
+    },
+    {
+        "name": "생강사심탕", "type": "소양병", 
+        "symptoms": ["장명", "트림", "구역감", "심하비", "설사"],
+        "rx": "생강 16g, 반하 12g, 황금 6g, 인삼 6g, 감초 6g, 건강 6g, 대조 6g, 황련 2g",
+        "info": "물소리와 트림이 심함"
+    },
+    {
+        "name": "황금탕", "type": "소양/태양", 
+        "symptoms": ["후중", "설사", "복통", "하리", "발열", "구토"],
+        "rx": "황금 12g, 작약 8g, 감초 4g, 대조 4g",
+        "info": "설사를 하면서 뒤가 묵직한 이질 증상"
+    },
+
+    # [양명병]
+    {
+        "name": "조위승기탕", "type": "양명병", 
+        "symptoms": ["변비", "배가 빵빵함", "발열", "맥활", "맥실", "거안(강)", "설태 황조"],
+        "rx": "망초 16g, 대황 8g, 감초 4g",
+        "info": "대변이 굳고 배가 빵빵함"
+    },
+
+    # [음병/허한]
+    {
+        "name": "이중탕", "type": "태음병", 
+        "symptoms": ["배가 차가움", "설사", "구토", "식욕부진", "맥침지", "빈혈", "복부 무력", "흉부희안"],
+        "rx": "인삼 6g, 백출 6g, 건강 6g, 감초 6g",
+        "info": "배를 따뜻하게 데워주는 처방. 희안"
+    },
+    {
+        "name": "진무탕", "type": "소음병", 
+        "symptoms": ["어지러움", "몸이 무거움", "설사", "배가 아픔", "몸이 떨림", "사지냉", "수족냉증", "맥침"],
+        "rx": "복령 6g, 작약 6g, 생강 6g, 백출 4g, 부자 1g",
+        "info": "양기 부족으로 물을 못 돌림. 부자 1g"
+    },
+    {
+        "name": "사역탕", "type": "소음병", 
+        "symptoms": ["사지냉", "손발이 매우 참", "설사", "맥미세", "졸림", "복부탄력 최하", "흉부희안"],
+        "rx": "부자 10g, 건강 6g, 감초 6g",
+        "info": "양기가 다 빠져나가는 위급한 상태. 희안"
+    },
+    {
+        "name": "오수유탕", "type": "궐음병", 
+        "symptoms": ["두통(정수리)", "구역질", "사지냉", "손발이 참", "가슴 답답", "맥현", "흉부희안"],
+        "rx": "오수유 6g, 생강 12g, 인삼 6g, 대조 6g",
+        "info": "머리가 깨질 듯 아프고 토할 것 같음"
+    },
+
+    # [수기/기타]
+    {
+        "name": "오령산", "type": "수기병", 
+        "symptoms": ["소변불리", "구건", "목 마름", "맥부", "물설사", "구토", "부종"],
+        "rx": "택사 10g, 저령 6g, 백출 6g, 복령 6g, 계지 4g",
+        "info": "목 마른데 소변이 안 나옴"
+    },
+    {
+        "name": "자감초탕", "type": "음혈허", 
+        "symptoms": ["가슴 두근거림", "맥결대", "숨참", "구건", "빈혈", "허로"],
+        "rx": "감초 8g, 생강 6g, 인삼 4g, 건지황 8g, 계지 6g, 아교 4g, 맥문동 10g, 마자인 8g, 대조 10g",
+        "info": "맥이 뚝뚝 끊기는 부정맥"
+    },
+    {
+        "name": "황련아교탕", "type": "소음병", 
+        "symptoms": ["불면증(심함)", "흉부거안(심함)", "심장화", "가슴 두근거림", "혀가 붉음", "설태 황"],
+        "rx": "황련 4g, 황금 4g, 작약 4g, 아교 4g, 계란노른자 2개",
+        "info": "가슴이 답답하고 잠을 못 잠"
+    },
+    {
+        "name": "당귀작약산", "type": "부인과", 
+        "symptoms": ["생리통", "어지러움", "부종", "빈혈", "배가 아픔", "하복부 냉증", "맥세약", "흉부희안"],
+        "rx": "작약 12g, 복령 8g, 택사 8g, 당귀 6g, 천궁 6g, 백출 6g",
+        "info": "혈허수독. 빈혈과 부종 동반"
+    },
+    {
+        "name": "계지복령환", "type": "부인과", 
+        "symptoms": ["하복부 통증", "제하경결", "생리통", "생리혈 덩어리", "피부 거침", "거안(중)", "맥삽"],
+        "rx": "복령 8g, 계지 6g, 목단피 6g, 도인 6g, 작약 6g",
+        "info": "아랫배에 딱딱한 어혈이 있음"
+    },
+    {
+        "name": "소건중탕", "type": "허로", 
+        "symptoms": ["복통", "피로", "식욕부진", "가슴 두근거림", "손발 열감", "복직근 긴장(현)", "흉부희안"],
+        "rx": "계지 6g, 작약 12g, 생강 6g, 대조 6g, 감초 4g, 교이 20g",
+        "info": "복직근이 팽팽하고 허약함"
+    },
+    {
+        "name": "사역산", "type": "소음병", 
+        "symptoms": ["흉협고만(중)", "복직근 긴장(판)", "사지냉", "손발이 참", "배가 아픔", "화가 남", "설사", "맥현"],
+        "rx": "시호 6g, 작약 6g, 지실 6g, 감초 6g",
+        "info": "배 전체가 널빤지처럼 팽팽함"
+    }
+]
+
+# ---------------------------------------------------------
+# 2. 약재 통합 계산 함수 (최대값 기준 합방 - 선생님 요청 반영)
+# ---------------------------------------------------------
+def merge_ingredients(formulas, multiplier=1.0):
+    merged = {}
+    for formula in formulas:
+        items = formula['rx'].split(',')
+        for item in items:
+            item = item.strip()
+            match = re.search(r"(\D+)\s*(\d+)g?", item)
+            if match:
+                name = match.group(1).strip()
+                try:
+                    weight = float(match.group(2))
+                except:
+                    weight = 0.0
+                
+                final_weight = weight * multiplier
+                # 사사오입 (정수 처리)
+                final_weight_int = int(final_weight + 0.5)
+                
+                # [수정된 로직] 합산하지 않고, 더 큰 용량을 따름 (Max Value)
+                if name in merged:
+                    merged[name] = max(merged[name], final_weight_int)
+                else:
+                    merged[name] = final_weight_int
+            else:
+                if item not in merged:
+                    merged[item] = "적당량"
+
+    # 용량 많은 순으로 정렬
+    sorted_ingredients = sorted(merged.items(), key=lambda x: x[1] if isinstance(x[1], int) else 0, reverse=True)
+    return sorted_ingredients
+
+# ---------------------------------------------------------
+# 3. 진단 엔진
+# ---------------------------------------------------------
+def calculate_candidates(selected_symptoms):
+    results = []
+    for formula in FORMULA_DB:
+        score = 0
+        matched = []
+        for symptom in formula['symptoms']:
+            for user_sym in selected_symptoms:
+                if user_sym.split('(')[0] in symptom or symptom.split('(')[0] in user_sym:
+                    score += 10
+                    matched.append(symptom)
+                    break
+        
+        # [정밀 가중치]
+        if "흉부거안(심함)" in selected_symptoms and formula['name'] == "황련아교탕": score += 20
+        if "흉부거안(보통)" in selected_symptoms and formula['name'] == "치자시탕": score += 20
+        # 희안 가중치 (허증 처방)
+        if "흉부희안" in selected_symptoms and formula['name'] in ["이중탕(인삼탕)", "사역탕", "소건중탕", "오수유탕", "당귀작약산"]: score += 20
+        
+        if "제하경결" in selected_symptoms and formula['name'] == "계지복령환": score += 20
+        if "복직근 긴장(현)" in selected_symptoms and formula['name'] == "소건중탕": score += 20
+        if "복직근 긴장(판)" in selected_symptoms and formula['name'] == "사역산": score += 20
+        if "상열하냉" in selected_symptoms and formula['name'] in ["건강황금황련인삼탕", "오매환"]: score += 30
+        if "후중" in selected_symptoms and formula['name'] == "황금탕": score += 20
+        
+        # 특수 가중치
+        if "흉협고만" in str(selected_symptoms) and formula['name'] == "소시호탕": score += 20
+        if formula['name'] == "백호가인삼탕" and "사지냉" in selected_symptoms and "구건" in selected_symptoms: score += 50
+
+        if score > 0:
+            results.append({
+                "name": formula['name'], "score": score,
+                "matched": list(set(matched)), "rx": formula['rx'], "info": formula['info']
+            })
+    
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results
+
+# ---------------------------------------------------------
+# 4. 메인 화면
+# ---------------------------------------------------------
+def main():
+    st.set_page_config(page_title="상한론 합방 시스템", layout="wide")
+    st.title("🩺 상한론 정밀 진단 & 선택형 합방기")
+    
+    # [섹션 1] 정밀 복진
+    st.header("1️⃣ 정밀 복진 (Physical Exam)")
+    col1, col2, col3 = st.columns(3)
+    
+    selected_inputs = []
+    
+    with col1:
+        st.subheader("① 흉부/명치 반응")
+        chest_reaction = st.radio(
+            "가슴/명치를 눌렀을 때 반응",
+            ["해당 없음", "희안 (누르면 시원/편안함)", "거안 (누르면 답답/아픔)"],
+            horizontal=True
         )
+        if "희안" in chest_reaction:
+            selected_inputs.append("흉부희안")
+        elif "거안" in chest_reaction:
+            geoan_level = st.select_slider("거안(답답함) 강도", ["약간", "보통", "많이", "심함(터질듯)"], value="보통")
+            if "심함" in geoan_level: 
+                selected_inputs.append("흉부거안(심함)")
+                selected_inputs.append("심장화")
+            elif "많이" in geoan_level: selected_inputs.append("흉부거안(많이)")
+            elif "보통" in geoan_level: selected_inputs.append("흉부거안(보통)")
+            else: selected_inputs.append("흉부거안(약간)")
+
+        if st.checkbox("상열하냉 (위는 열/아래는 냉)"): selected_inputs.append("상열하냉")
+
+    with col2:
+        st.subheader("② 흉협/복직근")
+        hypo = st.select_slider("흉협고만 (저항감)", ["없음", "약함", "중간", "강함", "최상"], value="없음")
+        if "강함" in hypo: selected_inputs.append("흉협고만(강)")
+        elif "중간" in hypo: selected_inputs.append("흉협고만(중)")
         
-        st.markdown("---")
-        st.subheader("⚙️ 용량 설정")
+        rectus = st.selectbox("복직근 상태", ["정상", "긴장 (현 - 가늘고 팽팽)", "긴장 (판 - 넓고 딱딱)", "연약 (무력)"])
+        if "현" in rectus: selected_inputs.append("복직근 긴장(현)")
+        elif "판" in rectus: selected_inputs.append("복직근 긴장(판)")
+
+    with col3:
+        st.subheader("③ 복부 탄력/압통")
+        elasticity = st.select_slider("복부 탄력도", ["1(무력)", "2(약함)", "3(보통)", "4(탄력좋음)", "5(판자/최상)"], value="3(보통)")
+        if "1" in elasticity: selected_inputs.append("복부탄력 최하")
+        elif "5" in elasticity: selected_inputs.append("복부탄력 최상")
         
-        cheop_su = st.number_input("1. 몇 첩(Cheop) 달이시나요?", min_value=1, value=20, step=1)
+        if st.checkbox("제하경결 (배꼽주변 딱딱)"): selected_inputs.append("제하경결")
+        if st.checkbox("심하지결 (명치 딱딱)"): selected_inputs.append("심하지결")
+
+    st.markdown("---")
+    st.header("2️⃣ 상세 증상 체크")
+    
+    col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+    
+    with col_s1:
+        st.subheader("머리/구강/맥")
+        pulses = st.multiselect("맥상", ["맥부", "맥침", "맥현", "맥긴", "맥홍대", "맥세", "맥결대", "맥미세", "맥완", "맥활삭"])
+        selected_inputs.extend(pulses)
+        checks = ["두통", "어지러움", "뒷목 뻣뻣함", "입이 씀", "구건(입 마름)", "목 마름", "극심한 갈증"]
+        for c in checks:
+            if st.checkbox(c, key=c): selected_inputs.append(c)
+    
+    with col_s2:
+        st.subheader("가슴/소화기")
+        checks = ["명치 답답(심하비)", "속쓰림", "구역질", "식욕저하", "장명(물소리)", "가스/팽만", "변비", "설사", "배가 차가움"]
+        for c in checks:
+            if st.checkbox(c, key=c): selected_inputs.append(c)
+
+    with col_s3:
+        st.subheader("한열/전신")
+        if st.checkbox("사지냉 (손발 전체 시림)"): selected_inputs.append("사지냉")
+        checks = ["오한", "발열", "한열왕래", "땀이 남", "땀이 안 남", "오풍", "물 많이 마심", "몸이 무거움", "기력저하"]
+        for c in checks:
+            if st.checkbox(c, key=c): selected_inputs.append(c)
+
+    with col_s4:
+        st.subheader("부인과/기타")
+        checks = ["생리통", "생리불순", "빈혈", "부종", "소변불리", "몸이 쑤심", "상충감", "손발이 참"]
+        for c in checks:
+            if st.checkbox(c, key=c): selected_inputs.append(c)
+            
+    with col_s5:
+        st.subheader("대변/땀(상세)")
+        if st.checkbox("후중 (뒤가 묵직)"): selected_inputs.append("후중")
+        if st.checkbox("두한 (머리 땀)"): selected_inputs.append("두한")
+        if st.checkbox("전신한 (전신 땀)"): selected_inputs.append("전신한")
+        insomnia = st.selectbox("불면증", ["없음", "약간(입면난)", "보통(중간깸)", "심함(밤샘)"])
+        if "심함" in insomnia: selected_inputs.append("불면증(심함)")
+        elif "보통" in insomnia: selected_inputs.append("불면증(중)")
+
+    st.markdown("---")
+
+    # [분석 단계]
+    if selected_inputs:
+        candidates = calculate_candidates(selected_inputs)
         
-        st.write("") 
-        multiplier = st.number_input(
-            "2. 처방 강도 배율 (예: 0.8, 1.2)", 
-            min_value=0.1, 
-            value=1.0, 
-            step=0.1, 
-            format="%.1f"
-        )
+        st.info(f"**선택된 증상:** {', '.join(selected_inputs)}")
         
-        if multiplier == 1.0:
-            st.info(f"💡 기본 용량 (1.0배)")
-        elif multiplier > 1.0:
-            st.warning(f"🔥 **{multiplier}배** 진하게(증량)")
+        if candidates:
+            st.header("3️⃣ 처방 선택 및 합방 (Select Formulas)")
+            st.caption("아래 추천 목록에서 **합방하고 싶은 처방을 체크**하세요. (상위 15개 표시)")
+            
+            selected_formulas = []
+            
+            for res in candidates[:15]:
+                # [수정] 처방 내용(Rx)을 라벨 아래에 명확히 표시
+                col_c1, col_c2 = st.columns([0.1, 0.9])
+                with col_c1:
+                    checked = st.checkbox("", key=res['name'])
+                with col_c2:
+                    st.write(f"**{res['name']}** (점수: {res['score']}점)")
+                    st.code(f"{res['rx']}") # 처방 내용 강조
+                    st.caption(f"💡 {res['info']} (일치: {', '.join(res['matched'])})")
+                
+                if checked:
+                    selected_formulas.append(res)
+                st.write("---") # 구분선
+
+            if selected_formulas:
+                st.header("4️⃣ 최종 합방 처방전 (Final Recipe)")
+                
+                # 배수 조절
+                multiplier = st.select_slider(
+                    "용량 배수 (Multiplier)", 
+                    options=[0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0], 
+                    value=1.0
+                )
+                
+                combined_name = " + ".join([f['name'] for f in selected_formulas])
+                st.success(f"### 🥣 선택된 합방: {combined_name}")
+                st.info(f"**적용 배수: {multiplier}배** (용량이 많은 약재 우선, 중복 시 최대값 적용)")
+                
+                final_ingredients = merge_ingredients(selected_formulas, multiplier)
+                
+                st.subheader("💊 통합 약재 용량 (많은 순)")
+                
+                col_i1, col_i2, col_i3 = st.columns(3)
+                for i, (name, weight) in enumerate(final_ingredients):
+                    target_col = [col_i1, col_i2, col_i3][i % 3]
+                    with target_col:
+                        if isinstance(weight, int):
+                            st.error(f"**{name} {weight}g**")
+                        else:
+                            st.warning(f"**{name}**")
+            else:
+                st.info("👆 위 목록에서 합방할 처방을 선택하면 계산 결과가 나옵니다.")
+
         else:
-            st.success(f"📉 **{multiplier}배** 순하게(감량)")
-            
-        st.markdown("---")
-        if st.button("🔄 초기화"):
-            st.rerun()
+            st.warning("일치하는 처방이 없습니다.")
     else:
-        st.error("⚠️ 데이터 파일을 찾을 수 없습니다!")
+        st.info("증상을 선택해주세요.")
 
-# --- 3. 메인 화면 ---
-st.title("🌿 스마트 처방 운용 시스템")
-
-if not df.empty:
-    if selected_display:
-        selected_rows = df[df['검색용이름'].isin(selected_display)]
-        
-        # 1. 기본 데이터 계산 (원방 기준 합산)
-        herb_dict = {}
-        for composition in selected_rows['구성약재']:
-            items = str(composition).split(',')
-            for item in items:
-                name, amount = parse_herb(item)
-                if name:
-                    if name in herb_dict:
-                        herb_dict[name] = max(herb_dict[name], amount)
-                    else:
-                        herb_dict[name] = amount
-        
-        # 2. 배율 적용 (계산 단계에서 먼저 곱함)
-        if multiplier != 1.0:
-            for k, v in herb_dict.items():
-                herb_dict[k] = v * multiplier
-
-        unique_key = f"editor_{len(selected_display)}_{multiplier}_{cheop_su}"
-
-        # 3. [핵심] 반올림(round) 후 정수(int) 변환
-        initial_data = pd.DataFrame([
-            {"약재명": k, "1첩 용량(g)": int(round(v)), "비고": ""} 
-            for k, v in herb_dict.items()
-        ])
-        initial_data = initial_data.sort_values("약재명")
-
-        col_left, col_right = st.columns([1.2, 1])
-
-        with col_left:
-            st.subheader("📝 처방 구성 및 가감(加減)")
-            if multiplier != 1.0:
-                st.warning(f"⚡ 표의 숫자는 **{multiplier}배** 적용 후 **반올림**된 용량입니다.")
-            else:
-                st.caption(f"현재 기본 용량(1.0배)입니다.")
-
-            # ★ 에러가 났던 부분이 바로 여기입니다 (괄호 확인 완료) ★
-            edited_df = st.data_editor(
-                initial_data,
-                num_rows="dynamic",
-                use_container_width=True,
-                column_config={
-                    "약재명": st.column_config.TextColumn("약재명", required=True),
-                    "1첩 용량(g)": st.column_config.NumberColumn("1첩 용량(g)", min_value=0, format="%d"),
-                    "비고": st.column_config.TextColumn("비고")
-                },
-                key=unique_key 
-            )
-            
-            with st.expander("참고: 원본 처방 구성"):
-                for idx, row in selected_rows.iterrows():
-                    st.write(f"**{row['처방명']}:** {row['구성약재']}")
-
-        with col_right:
-            if multiplier != 1.0:
-                st.subheader(f"📊 최종 처방전 ({cheop_su}첩 × {multiplier}배)")
-            else:
-                st.subheader(f"📊 최종 처방전 ({cheop_su}첩)")
-            
-            if not edited_df.empty:
-                # 총량 계산
-                edited_df["총 용량(g)"] = edited_df["1첩 용량(g)"] * cheop_su
-                
-                sorted_result = edited_df.sort_values(by="1첩 용량(g)", ascending=False)
-                
-                total_weight_1 = edited_df["1첩 용량(g)"].sum()
-                total_weight_final = edited_df["총 용량(g)"].sum()
-                
-                m1, m2 = st.columns(2)
-                m1.metric(f"1첩 ({multiplier}배)", f"{int(total_weight_1)} g")
-                m2.metric(f"총 무게 ({cheop_su}첩)", f"{int(total_weight_final)} g")
-                
-                st.divider()
-                st.markdown("##### 📋 탕전실 전달용")
-                
-                final_text_list = []
-                for idx, row in sorted_result.iterrows():
-                    if row['약재명'] and row['1첩 용량(g)'] > 0:
-                        final_text_list.append(f"{row['약재명']} {int(row['총 용량(g)'])}g")
-                
-                result_text = ", ".join(final_text_list)
-                st.text_area("복사해서 차트에 붙여넣으세요", result_text, height=200)
-                
-                st.dataframe(sorted_result[['약재명', '1첩 용량(g)', '총 용량(g)']], hide_index=True, use_container_width=True)
-                st.success("작성이 완료되었습니다.")
-
-    else:
-        st.info("👈 왼쪽 사이드바에서 처방을 검색하여 시작하세요.")
-else:
-    st.error("⚠️ 데이터 파일을 찾을 수 없습니다!")
+if __name__ == "__main__":
+    main()
